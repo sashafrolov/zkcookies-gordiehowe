@@ -1,4 +1,5 @@
 build/
+build-ligero-release/
 __pycache__/
 *.pyc
 .bench.lock

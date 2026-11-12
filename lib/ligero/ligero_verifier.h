@@ -139,10 +139,10 @@ class LigeroVerifier {
 
     // V -> P
     LigeroTranscript<Field>::gen_alphal(nl, &alphal[0], ts, F);
-    LigeroTranscript<Field>::gen_alphaq(&alphaq[0], p, ts, F);
+    LigeroTranscript<Field>::gen_alphaq(alphaq.data(), p, ts, F);
 
     // V -> P
-    LigeroTranscript<Field>::gen_uquad(&u_quad[0], p, ts, F);
+    LigeroTranscript<Field>::gen_uquad(u_quad.data(), p, ts, F);
 
     // P -> V (y_ldt is already absorbed with list-radius Ligero)
     if (u_ldt_received == nullptr) ts.write(&proof.y_ldt[0], 1, p.block, F);
@@ -199,9 +199,9 @@ class LigeroVerifier {
 
       {
         profiling::Scope sc(key("bin.v.ligero.rows", "odd.v.ligero.rows"));
-        LigeroCommon<Field>::inner_product_vector(&A[0], p, nl, nllterm,
-                                                  llterm, &alphal[0], lqc,
-                                                  &alphaq[0], F);
+        LigeroCommon<Field>::inner_product_vector(A.data(), p, nl, nllterm,
+                                                  llterm, alphal.data(), lqc,
+                                                  alphaq.data(), F);
         if (accum != nullptr) {
           // Nested in the rows phase; its key has no ".v." so that the
           // outermost verifier keys still add up (VerifyPhases.SumToTotal).
@@ -228,7 +228,7 @@ class LigeroVerifier {
       }
     }
 
-    if (!quadratic_check(p, proof, &idx[0], &u_quad[0], &mask_quad[0],
+    if (!quadratic_check(p, proof, idx.data(), u_quad.data(), mask_quad.data(),
                          interpolator, F)) {
       *why = "quadratic_check failed";
       return false;

@@ -52,6 +52,11 @@ ECDSA signatures. Read `pq_mdoc.h`.
 `composite/` proves possession of a composite ML-DSA-44 and ECDSA P-256
 signature on one private message, in three domains. Read `composite.h`.
 
+`zk-cookies/` ports the stateful credential update relation from Circom:
+BLAKE2s-256 commitments, nullifiers and RAPPOR derivation in a binary
+domain, with two ML-DSA-44 signature checks in the native ML-DSA domain.
+The domains are joined by GordieHowe MAC crossings. Read `state.h`.
+
 `shared/` holds what several applications use: the domain profiles and
 compile profiles (`domain_profile.h`, `setup.h`) and test helpers. The
 private message of a proof of possession and cutoff selection are library

@@ -27,6 +27,7 @@
 #include "random/random.h"
 #include "util/crypto.h"
 #include "util/parallel.h"
+#include "util/prover_profile.h"
 
 namespace proofs {
 
@@ -70,29 +71,40 @@ class BasicMerkleCommitment {
                 RandomEngine &rng) {
     // The nonces in leaf order (the RNG's order), then the leaves in
     // parallel chunks (util/parallel.h).
-    for (size_t i = 0; i < n_; ++i)
-      rng.bytes(nonce_[i].bytes, MerkleNonce::kLength);
-    parallel::for_each(n_, parallel::grain_for(n_, parallel::kChunks),
-                       [&](size_t i) {
-      Hash sha;
-      merkle_leaf_begin(sha, nonce_[i]);
-      updhash(i, sha);
+    {
+      profiling::Scope sc("merkle.commit.nonces");
+      for (size_t i = 0; i < n_; ++i)
+        rng.bytes(nonce_[i].bytes, MerkleNonce::kLength);
+    }
+    {
+      profiling::Scope sc("merkle.commit.leaves");
+      parallel::for_each(n_, parallel::grain_for(n_, parallel::kChunks),
+                         [&](size_t i) {
+        Hash sha;
+        merkle_leaf_begin(sha, nonce_[i]);
+        updhash(i, sha);
 
-      Digest dig;
-      sha.DigestData(dig.data);
-      mt_.set_leaf(i, dig);
-    });
+        Digest dig;
+        sha.DigestData(dig.data);
+        mt_.set_leaf(i, dig);
+      });
+    }
 
+    profiling::Scope sc("merkle.commit.tree");
     return mt_.build_tree();
   }
 
   void open(BasicMerkleProof<Hash> &proof, const size_t pos[/*np*/],
             size_t np) {
     // fill in the nonces of the opening
-    for (size_t i = 0; i < np; ++i) {
-      proof.nonce[i] = nonce_[pos[i]];
+    {
+      profiling::Scope sc("merkle.open.nonces");
+      for (size_t i = 0; i < np; ++i) {
+        proof.nonce[i] = nonce_[pos[i]];
+      }
     }
 
+    profiling::Scope sc("merkle.open.paths");
     (void)mt_.generate_compressed_proof(proof.path, pos, np);
   }
 

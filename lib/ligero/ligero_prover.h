@@ -181,7 +181,14 @@ public:
       std::vector<std::array<Elt, 3>> alphaq(p_.nq);
       parallel::Buffer<Elt> own_A;
       parallel::Buffer<Elt> &A = a_buffer != nullptr ? *a_buffer : own_A;
-      A.assign(p_.nwqrow * p_.w, Elt{});
+      {
+        // A caller can retain this buffer between proofs, but every proof
+        // still sizes and clears it before assembling the linear relation.
+        profiling::Scope sc(Field::kCharacteristicTwo
+                                ? "bin.ligero.rows.setup"
+                                : "odd.ligero.rows.setup");
+        A.assign(p_.nwqrow * p_.w, Elt{});
+      }
 
       // V -> P
       LigeroTranscript<Field>::gen_alphal(nl, alphal.data(), ts, F);
@@ -193,6 +200,9 @@ public:
                                                   llterm, alphal.data(), lqc,
                                                   alphaq.data(), F);
         if (accum != nullptr) {
+          profiling::Scope acc(Field::kCharacteristicTwo
+                                   ? "bin.ligero_rows.accumulate"
+                                   : "odd.ligero_rows.accumulate");
           (*accum)(A.data(), alphal.data());
         }
       }
@@ -229,9 +239,19 @@ public:
       check(!ts.exhausted(), "Fiat-Shamir challenge stream budget exceeded");
 
       profiling::Scope sc(Field::kCharacteristicTwo ? "bin.ligero.open" : "odd.ligero.open");
-      compute_req(proof, idx.data());
+      {
+        profiling::Scope extract(Field::kCharacteristicTwo
+                                     ? "bin.ligero.open.columns"
+                                     : "odd.ligero.open.columns");
+        compute_req(proof, idx.data());
+      }
 
-      mc_.open(proof.merkle, idx.data(), p_.nreq);
+      {
+        profiling::Scope paths(Field::kCharacteristicTwo
+                                   ? "bin.ligero.open.merkle"
+                                   : "odd.ligero.open.merkle");
+        mc_.open(proof.merkle, idx.data(), p_.nreq);
+      }
     }
   }
 
@@ -295,6 +315,9 @@ private:
       // that order (ILDT_0 first, so one repetition draws as before)
       for (size_t j = 0; j < p_.mode.ldt_reps; ++j) {
         random_row(p_.ildt + j, p_.block, rng, F);
+        profiling::Scope rs(Field::kCharacteristicTwo
+                                ? "bin.ligero.rs"
+                                : "odd.ligero.rs");
         interp->interpolate(&tableau_at(p_.ildt + j, 0));
       }
     }
@@ -314,7 +337,12 @@ private:
       Elt sum = Blas<Field>::dot1(p_.w, &tableau_at(p_.idot, p_.r), 1, F);
       F.sub(tableau_at(p_.idot, p_.r), sum);
 
-      interp->interpolate(&tableau_at(p_.idot, 0));
+      {
+        profiling::Scope rs(Field::kCharacteristicTwo
+                                ? "bin.ligero.rs"
+                                : "odd.ligero.rs");
+        interp->interpolate(&tableau_at(p_.idot, 0));
+      }
 
       // quadratic-test blinding row constrained to W = 0.  First
       // randomize the entire dblock:
@@ -323,7 +351,12 @@ private:
       // Then constrain to W = 0
       Blas<Field>::clear(p_.w, &tableau_at(p_.iquad, p_.r), 1, F);
 
-      interp->interpolate(&tableau_at(p_.iquad, 0));
+      {
+        profiling::Scope rs(Field::kCharacteristicTwo
+                                ? "bin.ligero.rs"
+                                : "odd.ligero.rs");
+        interp->interpolate(&tableau_at(p_.iquad, 0));
+      }
     }
   }
 
@@ -334,6 +367,8 @@ private:
   void interpolate_rows(size_t first, size_t n, size_t k,
                         const InterpolatorFactory &interpolator,
                         const std::vector<char> *sub = nullptr) {
+    profiling::Scope rs(Field::kCharacteristicTwo ? "bin.ligero.rs"
+                                                   : "odd.ligero.rs");
     const auto interp = interpolator.make(k, p_.block_enc);
     parallel::for_chunks(
         n, parallel::grain_for(n, parallel::kChunks), [&](size_t b, size_t e) {
@@ -443,9 +478,19 @@ private:
     for (size_t m = 0; m < 2; ++m) {
       const size_t ia = p_.ipiece + 3 * m, ic = ia + 1, ib = ia + 2;
       random_row(ic, p_.block, rng, F);
-      interp->interpolate(&tableau_at(ic, 0));
+      {
+        profiling::Scope rs(Field::kCharacteristicTwo
+                                ? "bin.ligero.rs"
+                                : "odd.ligero.rs");
+        interp->interpolate(&tableau_at(ic, 0));
+      }
       random_row(ib, p_.block - 1, rng, F);
-      interpB->interpolate(&tableau_at(ib, 0));
+      {
+        profiling::Scope rs(Field::kCharacteristicTwo
+                                ? "bin.ligero.rs"
+                                : "odd.ligero.rs");
+        interpB->interpolate(&tableau_at(ib, 0));
+      }
       random_row(ia, p_.block, rng, F);
       if (m == 0) {
         // IDOT: the mask sums to zero over the witness positions.
@@ -464,7 +509,12 @@ private:
           tableau_at(ia, i) = a;
         }
       }
-      interp->interpolate(&tableau_at(ia, 0));
+      {
+        profiling::Scope rs(Field::kCharacteristicTwo
+                                ? "bin.ligero.rs"
+                                : "odd.ligero.rs");
+        interp->interpolate(&tableau_at(ia, 0));
+      }
 
       // The mask the responses use, at positions [0, DBLOCK).
       masks_[m].resize(p_.dblock);
@@ -477,10 +527,30 @@ private:
               const LigeroQuadraticConstraint lqc[/*nq*/],
               const InterpolatorFactory &interpolator, RandomEngine &rng,
               const Field &F) {
-    layout_blinding_rows(interpolator, rng, F);
-    layout_witness_rows(W, subfield_boundary, interpolator, rng, F);
-    layout_quadratic_rows(W, lqc, interpolator, rng, F);
-    if (p_.mode.split()) layout_piece_rows(interpolator, rng, F);
+    {
+      profiling::Scope sc(Field::kCharacteristicTwo
+                              ? "bin.ligero.layout.blinding"
+                              : "odd.ligero.layout.blinding");
+      layout_blinding_rows(interpolator, rng, F);
+    }
+    {
+      profiling::Scope sc(Field::kCharacteristicTwo
+                              ? "bin.ligero.layout.witness"
+                              : "odd.ligero.layout.witness");
+      layout_witness_rows(W, subfield_boundary, interpolator, rng, F);
+    }
+    {
+      profiling::Scope sc(Field::kCharacteristicTwo
+                              ? "bin.ligero.layout.quadratic"
+                              : "odd.ligero.layout.quadratic");
+      layout_quadratic_rows(W, lqc, interpolator, rng, F);
+    }
+    if (p_.mode.split()) {
+      profiling::Scope sc(Field::kCharacteristicTwo
+                              ? "bin.ligero.layout.masks"
+                              : "odd.ligero.layout.masks");
+      layout_piece_rows(interpolator, rng, F);
+    }
   }
 
   // The mask of the dot-product (M = 0) or quadratic (M = 1) response at

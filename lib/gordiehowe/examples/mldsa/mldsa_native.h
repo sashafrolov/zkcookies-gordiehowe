@@ -80,16 +80,24 @@ struct MLDSANativeSignature {
 // W committed, the challenge, w', the norm of z, UseHint and the hint's
 // weight. The caller hashes w1 and crosses w1 and c (crossing).
 template <class S, class KF, class Sys, class DA, class PK, class W>
-auto mldsa_native_signature(Sys &cs, DA &A, const PK &pk, const W &w) {
+auto mldsa_native_signature(const Scope &s, Sys &cs, DA &A, const PK &pk,
+                            const W &w) {
+  (void)cs;
   using AF = std::decay_t<decltype(A.field())>;
-  const auto key = mldsa_key_of<S, KF>(cs, A, pk);
+  const auto key = mldsa_key_of<S, KF>(s, A, pk);
   const auto z = A.priv(Subfield{}, w.z);
   const auto h = A.priv(Bit{}, w.h);
-  const auto c = challenge<S>(cs.scope("challenge"), A, w.c_tilde);
+  const auto c = challenge<S>(s.scope("challenge"), A, w.c_tilde);
   const auto w_prime =
-      signature_relation<S>(cs.scope("signature"), A, key, z, c);
-  const auto w1 = signature_checks<S>(cs, A, z, h, w_prime, UseHintArm{});
+      signature_relation<S>(s.scope("signature"), A, key, z, c);
+  const auto w1 = signature_checks<S>(s, A, z, h, w_prime, UseHintArm{});
   return MLDSANativeSignature<AF>{w1, c};
+}
+
+// The same at the root scope, for applications with one ML-DSA signature.
+template <class S, class KF, class Sys, class DA, class PK, class W>
+auto mldsa_native_signature(Sys &cs, DA &A, const PK &pk, const W &w) {
+  return mldsa_native_signature<S, KF>(cs, cs, A, pk, w);
 }
 
 // The relation over the statement ST (MLDSAInputs<S>::Statement: the

@@ -143,6 +143,20 @@ auto key_hash(DH &H, const PK &pk) {
       .cache();
 }
 
+// key_hash in S, for a system that verifies more than one signature.
+template <class DH, class PK>
+auto key_hash(const Scope &s, DH &H, const PK &pk) {
+  using F = std::decay_t<decltype(H.field())>;
+  const F *ph = &H.field();
+  return s[H]
+      .pub(Bit{}, "tr", 8 * kTrBytes, depends_on(pk),
+           computes("shake256", {kTrBytes}),
+           [ph](const std::vector<uint8_t> &key) {
+             return ct::byte_bits(*ph, host::key_hash(key));
+           })
+      .cache();
+}
+
 // In domain H of system CS, the hashes of a signature on a message of
 // at most MAX bytes, its part of mu's buffer MSG and its length MSG_LENGTH
 // (Witness members: mu_layout's part, 2 bytes), under the context CTX (a
@@ -205,6 +219,24 @@ auto mldsa_hash_domain(Sys &cs, DH &H, const PK &pk, Ref<FW, Bit, PW> w1_A,
   const auto tr = key_hash(H, pk);
   const auto w1 = H.copy_of("w1", w1_A);
   const auto c_H = hash_to_challenge<S>(cs.scope("h2c"), H, tr, ctx, msg, w1);
+  return MLDSAHashChallenge<D, F>{H, w1, c_H};
+}
+
+// The same in S, so several signature verifiers can coexist in one system.
+template <class SET, class Sys, class DH, class PK, class FW, class PW,
+          class F>
+auto mldsa_hash_domain(const Scope &s, Sys &cs, DH &H, const PK &pk,
+                       Ref<FW, Bit, PW> w1_A,
+                       const lib::keccak::SpongeInput<F> &ctx,
+                       const lib::keccak::SpongeInput<F> &msg) {
+  using D = std::decay_t<decltype(H)>;
+  if (w1_A.n != SET::kW1Bits)
+    fail("mldsa_hash_domain: w1 has " + std::to_string(w1_A.n) +
+         " bits, not " + std::to_string(SET::kW1Bits));
+  const auto tr = key_hash(s, H, pk);
+  const auto w1 = s[H].copy_of("w1", w1_A);
+  const auto c_H =
+      hash_to_challenge<SET>(s.scope("h2c"), H, tr, ctx, msg, w1);
   return MLDSAHashChallenge<D, F>{H, w1, c_H};
 }
 
