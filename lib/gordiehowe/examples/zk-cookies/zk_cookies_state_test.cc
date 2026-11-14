@@ -118,6 +118,77 @@ TEST(ZkCookiesStateHost, HistoryLengthIsConfigurable) {
                 sizeof(uint64_t));
 }
 
+TEST(ZkCookiesState, HistoryUpdatePreservesSentinelSemantics) {
+  using P = param_sets::ROMParams;
+  using Sys = mldsa::Env<P>::Sys;
+  using HF = mldsa::Env<P>::HF;
+  mldsa::Env<P> env;
+  const auto bits = [&env](const auto &values, size_t width) {
+    std::vector<HF::Elt> out;
+    for (const auto &value : values)
+      for (size_t bit = 0; bit < width; ++bit)
+        out.push_back(ct::bit_elt(env.hf, (uint64_t(value) >> bit) & 1));
+    return out;
+  };
+  SecureRandomEngine rng;
+  // Exhaust the small histories' zero/nonzero patterns, including holes;
+  // the larger non-power-of-two history also checks logarithmic depth.
+  for (size_t n : {1, 3, 5, 129}) {
+    Sys cs("zk-cookies-history-update-test");
+    auto &H = cs.domain(domain_profile<P>(env.hf, env.rsh), "H");
+    const auto ips = H.priv(Bit{}, "ips", Shape{n, 32});
+    const auto geos = H.priv(Bit{}, "geos", Shape{n, 64});
+    const auto ip = H.priv(Bit{}, "new_ip", 32);
+    const auto geo = H.priv(Bit{}, "new_geo", 64);
+    const auto out_ips = H.pub(Bit{}, "expected_ips", Shape{n, 32});
+    const auto out_geos = H.pub(Bit{}, "expected_geos", Shape{n, 64});
+    const Expr<HF, Bit> zero = H.bit_from_unchecked(
+        "zero_flags", (!Expr<HF, Bit>(ips)).all(1));
+    const auto [updated_ips, updated_geos] = state_internal::updated_history(
+        Expr<HF, Bit>(ips), Expr<HF, Bit>(geos), Expr<HF, Bit>(ip),
+        Expr<HF, Bit>(geo), zero);
+    assert_equal(updated_ips, out_ips, "ips").pin(Placement::kCircuit);
+    assert_equal(updated_geos, out_geos, "geos").pin(Placement::kCircuit);
+    const auto compiled = compile(cs);
+    size_t logn = 0;
+    for (size_t capacity = 1; capacity < n; capacity *= 2) ++logn;
+    EXPECT_LE(compiled->compiled_domain(0).plan().layers, 3 * logn + 16);
+    const size_t patterns = n <= 5 ? size_t(1) << n : 6;
+    for (size_t mask = 0; mask < patterns; ++mask) {
+      for (uint32_t new_ip : {uint32_t(0), uint32_t(12), uint32_t(55)}) {
+        SCOPED_TRACE(::testing::Message() << "n=" << n << " mask=" << mask
+                                         << " new_ip=" << new_ip);
+        auto w = base_witness(n);
+        w.new_ip = new_ip;
+        for (size_t i = 0; i < n; ++i) {
+          const bool occupied = n <= 5 ? ((mask >> i) & 1)
+                                      : (mask == 5 || ((mask >> (i % 5)) & 1));
+          w.initial_state.ips[i] = occupied ? uint32_t(11 + i % 7) : 0;
+          // A zero IP need not have a zero geohash in the original circuit.
+          w.initial_state.geohashes[i] = 100000 + 17 * i;
+        }
+        const auto expected = host::updated_state(w);
+        Sys::Assignment statement, witness;
+        statement.set(out_ips, bits(expected.ips, 32));
+        statement.set(out_geos, bits(expected.geohashes, 64));
+        witness.set(ips, bits(w.initial_state.ips, 32));
+        witness.set(geos, bits(w.initial_state.geohashes, 64));
+        witness.set(ip, bits(std::array<uint32_t, 1>{w.new_ip}, 32));
+        witness.set(geo, bits(std::array<uint64_t, 1>{w.new_geohash}, 64));
+        const auto prep = compiled->prepare(statement);
+        const auto proof = prep.prove(witness, rng);
+        EXPECT_TRUE(prep.verify(proof));
+        if (mask == 0 && new_ip == 0) {
+          auto wrong = expected.ips;
+          wrong[0] ^= 1;
+          statement.set(out_ips, bits(wrong, 32));
+          EXPECT_FALSE(compiled->prepare(statement).verify(proof));
+        }
+      }
+    }
+  }
+}
+
 mldsa::Signature decoded_signature(const std::vector<uint8_t> &pk,
                                    const std::vector<uint8_t> &message,
                                    const std::vector<uint8_t> &signature) {
@@ -131,7 +202,7 @@ mldsa::Signature decoded_signature(const std::vector<uint8_t> &pk,
 }
 
 // The complete two-domain relation on the smallest configurable history.
-// This covers BLAKE2s, both ML-DSA signatures, both MAC crossings, policy
+// This covers the default hash, both ML-DSA signatures, both MAC crossings, policy
 // checks, RAPPOR and the state transition in one proof.
 TEST(ZkCookiesState, HonestProofVerifies) {
   std::array<uint8_t, 32> key_seed{};
