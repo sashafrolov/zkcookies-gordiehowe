@@ -1,7 +1,7 @@
 // Copyright 2026
 // SPDX-License-Identifier: Apache-2.0
 
-#include "gordiehowe/examples/zk-cookies/state_hash.h"
+#include "gordiehowe/examples/zk-cookies/zk_cookies_hash.h"
 
 #include <array>
 #include <cstddef>

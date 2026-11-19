@@ -1,19 +1,9 @@
 // Copyright 2026
 // SPDX-License-Identifier: Apache-2.0
 
-// GordieHowe port of zk_cred_logic/state.circom. The relation validates a
-// signed credential state and a signed server response, enforces the
-// geohash, fingerprint and age policies, emits a RAPPOR response, and
-// commits to the updated state.
-//
-// Two GordieHowe domains form the system. H is the binary domain: the
-// selected application hash, the state transition, policy checks, RAPPOR
-// and ML-DSA's required SHAKE computations. A is ML-DSA's native F_q
-// extension: both signatures' algebra. GordieHowe MAC crossings bind the
-// signature challenges and w1 values between them.
-
-#ifndef PRIVACY_PROOFS_ZK_LIB_GORDIEHOWE_EXAMPLES_ZK_COOKIES_STATE_H_
-#define PRIVACY_PROOFS_ZK_LIB_GORDIEHOWE_EXAMPLES_ZK_COOKIES_STATE_H_
+// Shared encodings, ML-DSA inputs, and bounded-depth history policies.
+#ifndef PRIVACY_PROOFS_ZK_LIB_GORDIEHOWE_EXAMPLES_ZK_COOKIES_COMMON_H_
+#define PRIVACY_PROOFS_ZK_LIB_GORDIEHOWE_EXAMPLES_ZK_COOKIES_COMMON_H_
 
 #include <array>
 #include <cstddef>
@@ -25,7 +15,7 @@
 #include "gordiehowe/examples/mldsa/mldsa_builders.h"
 #include "gordiehowe/examples/mldsa/mldsa_native.h"
 #include "gordiehowe/examples/shared/setup.h"
-#include "gordiehowe/examples/zk-cookies/state_hash.h"
+#include "gordiehowe/examples/zk-cookies/zk_cookies_hash.h"
 #include "gordiehowe/expr.h"
 #include "gordiehowe/lib/arith.h"
 #include "gordiehowe/lib/keccak.h"
@@ -43,20 +33,11 @@ inline constexpr size_t kFingerprintBits = 2 * kFingerprintBitsPerBlock;
 
 // Policy values from state.circom. A relation's history length is a separate
 // construction argument because it changes the compiled shape.
-struct StateConfig {
+struct CredentialHistoryConfig {
   size_t geohash_shared_bits = 20;
   size_t fingerprint_threshold = 400; // similarity must be strictly above
   uint8_t rappor_p = 127;
   uint8_t rappor_q = 191;
-};
-
-template <template <class> class F> struct CredentialState {
-  F<std::vector<uint32_t>> ips;
-  F<std::vector<uint64_t>> geohashes;
-  F<Fingerprint> last_fingerprint;
-  F<std::array<uint8_t, 2>> year_of_birth;
-  F<std::array<uint8_t, 32>> users_prf_seed;
-  F<uint64_t> state_counter;
 };
 
 template <template <class> class F> struct SignatureWitness {
@@ -65,7 +46,7 @@ template <template <class> class F> struct SignatureWitness {
   F<std::array<uint8_t, MLDSA::kCTildeBytes>> c_tilde;
 };
 
-template <template <class> class F> struct StateStatement {
+template <template <class> class F> struct CredentialHistoryStatement {
   F<std::array<uint8_t, MLDSA::kPkBytes>> server_public_key;
   F<Digest> old_state_nullifier;
   F<Digest> server_response_nullifier;
@@ -73,28 +54,8 @@ template <template <class> class F> struct StateStatement {
   F<uint16_t> rappor_response;
 };
 
-template <template <class> class F> struct StateWitness {
-  CredentialState<F> initial_state;
-  F<std::array<uint8_t, 32>> initial_commitment_randomness;
-  SignatureWitness<F> initial_state_signature;
+namespace common_internal {
 
-  F<uint32_t> new_ip;
-  F<uint64_t> new_geohash;
-  F<std::array<uint8_t, 32>> new_rappor_nonce;
-  SignatureWitness<F> server_response_signature;
-
-  F<std::array<uint8_t, 32>> new_state_commitment_randomness;
-  F<Fingerprint> new_fingerprint;
-};
-
-inline StateWitness<Value> state_witness_shape(size_t history_length) {
-  StateWitness<Value> w{};
-  w.initial_state.ips.resize(history_length);
-  w.initial_state.geohashes.resize(history_length);
-  return w;
-}
-
-namespace state_internal {
 
 inline std::vector<uint8_t> little_endian(uint64_t x, size_t bytes) {
   std::vector<uint8_t> out(bytes);
@@ -217,45 +178,12 @@ Expr<F, Bit> popcount(const Scope &s, Domain<F> &H, const std::string &name,
   return words.front();
 }
 
-template <class F>
-Expr<F, Bit>
-state_payload(Domain<F> &H, size_t history_length, const Expr<F, Bit> &ips,
-              const Expr<F, Bit> &geohashes, const Expr<F, Bit> &fingerprint,
-              const Expr<F, Bit> &year_of_birth, const Expr<F, Bit> &seed,
-              const Expr<F, Bit> &counter) {
-  return lib::keccak::sponge_input(
-      lib::keccak::constant_bytes(little_endian(history_length, 4)), ips.flat(),
-      geohashes.flat(), fingerprint.flat(), year_of_birth.flat(), seed.flat(),
-      counter.flat());
-}
-
-template <class Hash, class F>
-Expr<F, Bit>
-state_digest(const Scope &s, Domain<F> &H, size_t history_length,
-             const Expr<F, Bit> &ips, const Expr<F, Bit> &geohashes,
-             const Expr<F, Bit> &fingerprint, const Expr<F, Bit> &year_of_birth,
-             const Expr<F, Bit> &seed, const Expr<F, Bit> &counter) {
-  return tagged_hash<Hash>(s, H, "digest", "zk-cookies/state/v1",
-                           state_payload(H, history_length, ips, geohashes,
-                                         fingerprint, year_of_birth, seed,
-                                         counter));
-}
-
 template <class Hash, class F>
 Expr<F, Bit> state_commitment(const Scope &s, Domain<F> &H,
                               const Expr<F, Bit> &randomness,
                               const Expr<F, Bit> &digest) {
   return tagged_hash<Hash>(s, H, "digest", "zk-cookies/state-commitment/v1",
                            randomness.flat().concat(digest.flat()));
-}
-
-template <class Hash, class F>
-Expr<F, Bit>
-response_digest(const Scope &s, Domain<F> &H, const Expr<F, Bit> &ip,
-                const Expr<F, Bit> &geohash, const Expr<F, Bit> &nonce) {
-  return tagged_hash<Hash>(
-      s, H, "digest", "zk-cookies/server-response/v1",
-      ip.flat().concat(geohash.flat()).concat(nonce.flat()));
 }
 
 template <class Hash, class F>
@@ -315,18 +243,35 @@ Expr<F, Bit> add_to_bloom(const Scope &s, Domain<F> &H, const std::string &name,
 }
 
 template <class Hash, class F>
-Expr<F, Bit> rappor(const Scope &s, Domain<F> &H, const StateConfig &config,
-                    const Expr<F, Bit> &seed, const Expr<F, Bit> &nonce,
-                    const Expr<F, Bit> &counter,
-                    const Expr<F, Bit> &distinct_ips,
-                    const Expr<F, Bit> &similarity) {
-  const Scope sc = s.scope("rappor");
+Expr<F, Bit> randomize_bloom(
+    const Scope &sc, Domain<F> &H, uint8_t rappor_p, uint8_t rappor_q,
+    const Expr<F, Bit> &seed, const Expr<F, Bit> &nonce,
+    const Expr<F, Bit> &counter, const Expr<F, Bit> &filter) {
   const auto p = tagged_hash<Hash>(
       sc, H, "p", "zk-cookies/rappor-p/v1",
       seed.flat().concat(nonce.flat()).concat(counter.flat()));
   const auto q = tagged_hash<Hash>(sc, H, "q", "zk-cookies/rappor-q/v1",
                                    seed.flat().concat(p.flat()));
 
+  const auto pb = p.reshape({32, 8});
+  const auto qb = q.reshape({32, 8});
+  Expr<F, Bit> irr;
+  for (size_t i = 0; i < 16; ++i) {
+    const auto pbit = pb.at(0, i).from_bits() < rappor_p;
+    const auto qbit = qb.at(0, i).from_bits() < rappor_q;
+    const auto bit = filter.at(i).mux(qbit, pbit);
+    irr = i == 0 ? bit : irr.concat(bit);
+  }
+  return irr;
+}
+
+template <class Hash, class F>
+Expr<F, Bit> rappor(const Scope &s, Domain<F> &H, const CredentialHistoryConfig &config,
+                    const Expr<F, Bit> &seed, const Expr<F, Bit> &nonce,
+                    const Expr<F, Bit> &counter,
+                    const Expr<F, Bit> &distinct_ips,
+                    const Expr<F, Bit> &similarity) {
+  const Scope sc = s.scope("rappor");
   auto filter = H.constant(Bit{}, std::vector<uint64_t>(16, 0));
   filter = add_to_bloom<Hash>(sc, H, "distinct_ips",
                               "zk-cookies/bloom/distinct-ips/v1", filter,
@@ -346,43 +291,16 @@ Expr<F, Bit> rappor(const Scope &s, Domain<F> &H, const StateConfig &config,
   geo_bits[geo_digest[0] >> 4] = 1;
   filter = filter | H.constant(Bit{}, geo_bits);
 
-  const auto pb = p.reshape({32, 8});
-  const auto qb = q.reshape({32, 8});
-  Expr<F, Bit> irr;
-  for (size_t i = 0; i < 16; ++i) {
-    const auto pbit = pb.at(0, i).from_bits() < config.rappor_p;
-    const auto qbit = qb.at(0, i).from_bits() < config.rappor_q;
-    const auto bit = filter.at(i).mux(qbit, pbit);
-    irr = i == 0 ? bit : irr.concat(bit);
-  }
-  return irr;
+  return randomize_bloom<Hash>(sc, H, config.rappor_p, config.rappor_q,
+                                seed, nonce, counter, filter);
 }
 
-} // namespace state_internal
-
-// The complete state-update relation. HISTORY_LENGTH changes the compiled
-// statement/witness shape and is therefore fixed per compiled relation.
-template <class P, class Hash = hashes::Default>
-void state_relation(typename mldsa::Env<P>::Sys &cs, const mldsa::Env<P> &env,
-                    StateStatement<In> st, StateWitness<In> w,
-                    size_t history_length, const StateConfig &config = {}) {
-  using HF = typename mldsa::Env<P>::HF;
-  static_assert(Hash::template supports<HF>,
-                "the selected zk-cookies hash does not support this profile");
-  namespace si = state_internal;
-  if (history_length == 0)
-    fail("state: an empty history");
-  if (w.initial_state.ips.dims().at(0) != history_length ||
-      w.initial_state.geohashes.dims().at(0) != history_length)
-    fail("state: history shape mismatch");
-  if (config.geohash_shared_bits == 0 || config.geohash_shared_bits > 60)
-    fail("state: geohash_shared_bits must lie in [1, 60]");
-  if (config.fingerprint_threshold >= kFingerprintBits)
-    fail("state: fingerprint threshold must be below 500");
-
-  auto &A = cs.domain(domain_profile<P>(env.af, env.rsa), "A");
-  auto &H = cs.domain(domain_profile<P>(env.hf, env.rsh), "H");
-
+// The two signatures share a public key, with independent algebra and MAC
+// crossings. ML-DSA's FIPS-mandated SHAKE remains in H for every hash policy.
+template <class Sys, class AF, class HF, class St, class W>
+void verify_signatures(Sys &cs, Domain<AF> &A, Domain<HF> &H, const St &st,
+                       const W &w, const Expr<HF, Bit> &old_commitment,
+                       const Expr<HF, Bit> &response) {
   // Both signatures' algebra is isolated in A under disjoint scopes.
   const Scope initial_sig_scope = cs.scope("initial_state_signature");
   const auto initial_sig = mldsa::mldsa_native_signature<MLDSA, HF>(
@@ -392,44 +310,6 @@ void state_relation(typename mldsa::Env<P>::Sys &cs, const mldsa::Env<P> &env,
   const auto response_sig = mldsa::mldsa_native_signature<MLDSA, HF>(
       response_sig_scope, cs, A, st.server_public_key,
       w.server_response_signature);
-
-  // Commit private inputs in H using fixed-width little-endian bits.
-  const auto ips = H.priv(Bit{}, w.initial_state.ips);
-  const auto geohashes = H.priv(Bit{}, w.initial_state.geohashes);
-  const auto fingerprint = H.priv(w.initial_state.last_fingerprint);
-  const auto yob = H.priv(w.initial_state.year_of_birth);
-  const auto seed = H.priv(w.initial_state.users_prf_seed);
-  const auto counter = H.priv(Bit{}, w.initial_state.state_counter);
-  const auto initial_randomness = H.priv(w.initial_commitment_randomness);
-  const auto new_ip = H.priv(Bit{}, w.new_ip);
-  const auto new_geohash = H.priv(Bit{}, w.new_geohash);
-  const auto rappor_nonce = H.priv(w.new_rappor_nonce);
-  const auto new_randomness = H.priv(w.new_state_commitment_randomness);
-  const auto new_fingerprint = H.priv(w.new_fingerprint);
-  const auto counter_word = Expr<HF, Bit>(counter).flat();
-  const auto new_ip_word = Expr<HF, Bit>(new_ip).flat();
-  const auto new_geohash_word = Expr<HF, Bit>(new_geohash).flat();
-
-  const Scope encoding = cs.scope("encoding");
-  si::fingerprint_encoding(encoding.scope("old"), Expr<HF, Bit>(fingerprint));
-  si::fingerprint_encoding(encoding.scope("new"),
-                           Expr<HF, Bit>(new_fingerprint));
-
-  // Old state, its commitment, and the signed server response.
-  const auto old_digest =
-      si::state_digest<Hash>(cs.scope("old_state"), H, history_length, ips,
-                             geohashes, fingerprint, yob, seed, counter);
-  const auto old_commitment = si::state_commitment<Hash>(
-      cs.scope("old_state_commitment"), H, initial_randomness, old_digest);
-  assert_equal(old_digest, st.old_state_nullifier.bits(H).flat(),
-               "old_state_nullifier");
-
-  const auto response = si::response_digest<Hash>(
-      cs.scope("server_response"), H, new_ip, new_geohash, rappor_nonce);
-  const auto response_nullifier = si::response_nullifier<Hash>(
-      cs.scope("server_response_nullifier"), H, seed, response);
-  assert_equal(response_nullifier, st.server_response_nullifier.bits(H).flat(),
-               "server_response_nullifier");
 
   // ML-DSA signs the two 32-byte application-hash digests under the empty
   // context. Its own standards-mandated SHAKE computations are unchanged.
@@ -445,67 +325,66 @@ void state_relation(typename mldsa::Env<P>::Sys &cs, const mldsa::Env<P> &env,
   mldsa::crossing(response_sig_scope.scope("crossing"), response_hash,
                   response_sig.c);
 
-  const Scope policy = cs.scope("policy");
+}
+
+template <class F> struct HistoryInputs {
+  Expr<F, Bit> ips, geohashes, fingerprint, yob, seed, counter;
+  Expr<F, Bit> new_ip, new_geohash, nonce, new_fingerprint;
+};
+template <class F> struct HistoryTransition {
+  Expr<F, Bit> ips, geohashes, counter;
+};
+
+// Shared by credential history and both attribution variants. No selector,
+// reduction, or concatenation chain grows linearly in the history length.
+template <class Hash, class F>
+HistoryTransition<F> history_transition(
+    const Scope &policy, Domain<F> &H, const CredentialHistoryConfig &config,
+    const HistoryInputs<F> &in, const Expr<F, Bit> &expected_rappor) {
+  const auto &[ips, geohashes, fingerprint, yob, seed, counter,
+               new_ip_word, new_geohash_word, rappor_nonce, new_fingerprint] = in;
+  const auto counter_word = counter.flat();
   // A first request bypasses the geohash-prefix check. Otherwise at least
   // one stored geohash shares the configured bits 60-B .. 59.
   // Generators reuse this history-wide predicate instead of recomputing
   // every slot's zero test for each population-count leaf and update.
-  const Expr<HF, Bit> old_ip_zero = H.bit_from_unchecked(
-      policy.scoped("old_ip_zero"), (!Expr<HF, Bit>(ips)).all(1));
+  const Expr<F, Bit> old_ip_zero = H.bit_from_unchecked(
+      policy.scoped("old_ip_zero"), (!Expr<F, Bit>(ips)).all(1));
   const auto empty_history = old_ip_zero.all(0);
   const size_t lo = 60 - config.geohash_shared_bits;
-  const auto old_prefix = Expr<HF, Bit>(geohashes).slice(lo, 60, 1);
+  const auto old_prefix = Expr<F, Bit>(geohashes).slice(lo, 60, 1);
   const auto new_prefix = new_geohash_word.slice(lo, 60);
   const auto prefix_match = (!(old_prefix ^ new_prefix)).all(1).any(0);
   assert_true(prefix_match | empty_history, policy.name("geohash_prefix"));
 
-  const auto old_fp = si::fingerprint_bits(Expr<HF, Bit>(fingerprint));
-  const auto new_fp = si::fingerprint_bits(Expr<HF, Bit>(new_fingerprint));
+  const auto old_fp = fingerprint_bits(Expr<F, Bit>(fingerprint));
+  const auto new_fp = fingerprint_bits(Expr<F, Bit>(new_fingerprint));
   const auto similarity =
-      si::popcount(policy, H, "fingerprint_similarity", !(old_fp ^ new_fp), 16);
+      popcount(policy, H, "fingerprint_similarity", !(old_fp ^ new_fp), 16);
   assert_true(!(similarity.from_bits() <= config.fingerprint_threshold),
               policy.name("fingerprint_threshold"));
-  si::age_check(policy.scope("age"), H, yob);
+  age_check(policy.scope("age"), H, yob);
 
   const auto distinct_ips =
-      si::popcount(policy, H, "distinct_ips", !old_ip_zero, 64);
-  const auto similarity64 = si::extend_word(H, similarity, 64);
-  const auto irr = si::rappor<Hash>(policy, H, config, seed, rappor_nonce,
+      popcount(policy, H, "distinct_ips", !old_ip_zero, 64);
+  const auto similarity64 = extend_word(H, similarity, 64);
+  const auto irr = rappor<Hash>(policy, H, config, seed, rappor_nonce,
                                     counter, distinct_ips, similarity64);
-  assert_equal(irr, st.rappor_response.bits(H).flat(), "rappor_response");
+  assert_equal(irr, expected_rappor, "rappor_response");
 
   // Preserve state.circom's update semantics: keep an existing IP, else
   // fill the first zero slot, else drop the oldest entry and append.
-  const auto [updated_ips, updated_geohashes] = si::updated_history(
-      Expr<HF, Bit>(ips), Expr<HF, Bit>(geohashes), new_ip_word,
+  const auto [updated_ips, updated_geohashes] = updated_history(
+      Expr<F, Bit>(ips), Expr<F, Bit>(geohashes), new_ip_word,
       new_geohash_word, old_ip_zero);
   const auto one = lib::arith::constant_word(H, 1, 64);
   const auto updated_counter =
-      lib::arith::add(counter_word, one, "updated_state.counter");
-  const auto new_digest = si::state_digest<Hash>(
-      cs.scope("updated_state"), H, history_length, updated_ips,
-      updated_geohashes, new_fingerprint, yob, seed, updated_counter);
-  const auto new_commitment = si::state_commitment<Hash>(
-      cs.scope("new_state_commitment"), H, new_randomness, new_digest);
-  assert_equal(new_commitment, st.new_state_commitment.bits(H).flat(),
-               "new_state_commitment");
+      lib::arith::add(counter_word, one, policy.name("updated_counter"));
+  return {updated_ips, updated_geohashes, updated_counter};
 }
 
-template <class P, class Hash = hashes::Default>
-Relation<StateStatement<Value>, StateWitness<Value>>
-state(const mldsa::Env<P> &env, size_t history_length,
-      const StateConfig &config = {}, const BuildOptions &build = {}) {
-  return compile<StateStatement, StateWitness>(
-      build.profile(mldsa::compile_profile<P, MLDSA>()),
-      [&env, history_length, config](typename mldsa::Env<P>::Sys &cs,
-                                     StateStatement<In> st,
-                                     StateWitness<In> w) {
-        state_relation<P, Hash>(cs, env, st, w, history_length, config);
-      },
-      std::string("zk-cookies-state-") + Hash::kId, StateStatement<Value>{},
-      state_witness_shape(history_length), build.compile);
-}
+} // namespace common_internal
 
 } // namespace proofs::gordiehowe::examples::zk_cookies
 
-#endif // PRIVACY_PROOFS_ZK_LIB_GORDIEHOWE_EXAMPLES_ZK_COOKIES_STATE_H_
+#endif // PRIVACY_PROOFS_ZK_LIB_GORDIEHOWE_EXAMPLES_ZK_COOKIES_COMMON_H_

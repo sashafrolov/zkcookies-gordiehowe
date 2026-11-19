@@ -52,11 +52,13 @@ ECDSA signatures. Read `pq_mdoc.h`.
 `composite/` proves possession of a composite ML-DSA-44 and ECDSA P-256
 signature on one private message, in three domains. Read `composite.h`.
 
-`zk-cookies/` ports the stateful credential update relation from Circom:
+`zk-cookies/` ports the credential history, single attribution, multi attribution
+and streaming relations from Circom:
 selectable BLAKE3-256, Poseidon2b, BLAKE2s-256 or SHA-256 commitments,
 nullifiers and RAPPOR derivation in a binary domain, with Poseidon2b as the default
 and two ML-DSA-44 signature checks in the native ML-DSA domain. The domains are
-joined by GordieHowe MAC crossings. Read `state.h` and
+joined by GordieHowe MAC crossings. Each variant has a named circuit and benchmark.
+Read `zk_cookies_credential_history.h` and
 `zk-cookies/README.md`.
 
 `shared/` holds what several applications use: the domain profiles and

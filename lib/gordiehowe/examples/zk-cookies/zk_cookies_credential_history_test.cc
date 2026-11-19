@@ -1,7 +1,7 @@
 // Copyright 2026
 // SPDX-License-Identifier: Apache-2.0
 
-#include "gordiehowe/examples/zk-cookies/state_builders.h"
+#include "gordiehowe/examples/zk-cookies/zk_cookies_credential_history_builders.h"
 
 #include <array>
 #include <cstddef>
@@ -45,8 +45,8 @@ Fingerprint fingerprint(size_t flipped) {
   return out;
 }
 
-StateWitness<Value> base_witness(size_t history_length) {
-  StateWitness<Value> w = state_witness_shape(history_length);
+CredentialHistoryWitness<Value> base_witness(size_t history_length) {
+  CredentialHistoryWitness<Value> w = credential_history_witness_shape(history_length);
   w.initial_state.last_fingerprint = fingerprint(0);
   w.initial_state.year_of_birth = {'0', '0'};
   for (size_t i = 0; i < 32; ++i) {
@@ -62,7 +62,7 @@ StateWitness<Value> base_witness(size_t history_length) {
   return w;
 }
 
-TEST(ZkCookiesStateHost, ColdStartFillsFirstSlot) {
+TEST(ZkCookiesCredentialHistoryHost, ColdStartFillsFirstSlot) {
   const auto w = base_witness(5);
   const auto next = host::updated_state(w);
   EXPECT_EQ(next.ips, (std::vector<uint32_t>{w.new_ip, 0, 0, 0, 0}));
@@ -74,7 +74,7 @@ TEST(ZkCookiesStateHost, ColdStartFillsFirstSlot) {
             401);
 }
 
-TEST(ZkCookiesStateHost, ExistingIpLeavesHistoryUnchanged) {
+TEST(ZkCookiesCredentialHistoryHost, ExistingIpLeavesHistoryUnchanged) {
   auto w = base_witness(5);
   w.initial_state.ips = {w.new_ip, 0, 0, 0, 0};
   w.initial_state.geohashes = {10, 0, 0, 0, 0};
@@ -83,7 +83,7 @@ TEST(ZkCookiesStateHost, ExistingIpLeavesHistoryUnchanged) {
   EXPECT_EQ(next.geohashes, w.initial_state.geohashes);
 }
 
-TEST(ZkCookiesStateHost, NewIpFillsFirstEmptySlot) {
+TEST(ZkCookiesCredentialHistoryHost, NewIpFillsFirstEmptySlot) {
   auto w = base_witness(5);
   w.initial_state.ips = {1, 2, 0, 0, 0};
   w.initial_state.geohashes = {10, 20, 0, 0, 0};
@@ -94,7 +94,7 @@ TEST(ZkCookiesStateHost, NewIpFillsFirstEmptySlot) {
             (std::vector<uint64_t>{10, 20, w.new_geohash, 0, 0}));
 }
 
-TEST(ZkCookiesStateHost, NewIpShiftsAFullHistory) {
+TEST(ZkCookiesCredentialHistoryHost, NewIpShiftsAFullHistory) {
   auto w = base_witness(5);
   w.initial_state.ips = {1, 2, 3, 4, 5};
   w.initial_state.geohashes = {10, 20, 30, 40, 50};
@@ -105,7 +105,7 @@ TEST(ZkCookiesStateHost, NewIpShiftsAFullHistory) {
             (std::vector<uint64_t>{20, 30, 40, 50, w.new_geohash}));
 }
 
-TEST(ZkCookiesStateHost, HistoryLengthIsConfigurable) {
+TEST(ZkCookiesCredentialHistoryHost, HistoryLengthIsConfigurable) {
   auto w = base_witness(3);
   w.initial_state.ips = {1, 2, 3};
   w.initial_state.geohashes = {10, 20, 30};
@@ -118,7 +118,7 @@ TEST(ZkCookiesStateHost, HistoryLengthIsConfigurable) {
                 sizeof(uint64_t));
 }
 
-TEST(ZkCookiesState, HistoryUpdatePreservesSentinelSemantics) {
+TEST(ZkCookiesCredentialHistory, HistoryUpdatePreservesSentinelSemantics) {
   using P = param_sets::ROMParams;
   using Sys = mldsa::Env<P>::Sys;
   using HF = mldsa::Env<P>::HF;
@@ -144,7 +144,7 @@ TEST(ZkCookiesState, HistoryUpdatePreservesSentinelSemantics) {
     const auto out_geos = H.pub(Bit{}, "expected_geos", Shape{n, 64});
     const Expr<HF, Bit> zero = H.bit_from_unchecked(
         "zero_flags", (!Expr<HF, Bit>(ips)).all(1));
-    const auto [updated_ips, updated_geos] = state_internal::updated_history(
+    const auto [updated_ips, updated_geos] = credential_history_internal::updated_history(
         Expr<HF, Bit>(ips), Expr<HF, Bit>(geos), Expr<HF, Bit>(ip),
         Expr<HF, Bit>(geo), zero);
     assert_equal(updated_ips, out_ips, "ips").pin(Placement::kCircuit);
@@ -204,7 +204,7 @@ mldsa::Signature decoded_signature(const std::vector<uint8_t> &pk,
 // The complete two-domain relation on the smallest configurable history.
 // This covers the default hash, both ML-DSA signatures, both MAC crossings, policy
 // checks, RAPPOR and the state transition in one proof.
-TEST(ZkCookiesState, HonestProofVerifies) {
+TEST(ZkCookiesCredentialHistory, HonestProofVerifies) {
   std::array<uint8_t, 32> key_seed{};
   for (size_t i = 0; i < key_seed.size(); ++i) key_seed[i] = uint8_t(i);
   const auto key = mldsa::support::mldsa_key<MLDSA>(key_seed);
@@ -221,10 +221,10 @@ TEST(ZkCookiesState, HonestProofVerifies) {
                 decoded_signature(pk, initial_message, initial_bytes));
   set_signature(witness.server_response_signature,
                 decoded_signature(pk, response_message, response_bytes));
-  const auto statement = state_statement(pk, host::outputs(witness));
+  const auto statement = credential_history_statement(pk, host::outputs(witness));
 
   mldsa::Env<param_sets::ROMParams> env;
-  const auto relation = state(env, 1);
+  const auto relation = zk_cookies_credential_history(env, 1);
   SecureRandomEngine rng;
   const auto proof = relation.prove(statement, witness, rng);
   EXPECT_TRUE(relation.verify(statement, proof));

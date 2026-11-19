@@ -5,8 +5,8 @@
 // the same 32-byte hash on the circuit and host sides.  State logic is
 // otherwise independent of the selected hash.
 
-#ifndef PRIVACY_PROOFS_ZK_LIB_GORDIEHOWE_EXAMPLES_ZK_COOKIES_STATE_HASH_H_
-#define PRIVACY_PROOFS_ZK_LIB_GORDIEHOWE_EXAMPLES_ZK_COOKIES_STATE_HASH_H_
+#ifndef PRIVACY_PROOFS_ZK_LIB_GORDIEHOWE_EXAMPLES_ZK_COOKIES_HASH_H_
+#define PRIVACY_PROOFS_ZK_LIB_GORDIEHOWE_EXAMPLES_ZK_COOKIES_HASH_H_
 
 #include <array>
 #include <cstdint>
@@ -104,4 +104,4 @@ using Default = Poseidon2b;
 
 } // namespace proofs::gordiehowe::examples::zk_cookies::hashes
 
-#endif // PRIVACY_PROOFS_ZK_LIB_GORDIEHOWE_EXAMPLES_ZK_COOKIES_STATE_HASH_H_
+#endif // PRIVACY_PROOFS_ZK_LIB_GORDIEHOWE_EXAMPLES_ZK_COOKIES_HASH_H_
